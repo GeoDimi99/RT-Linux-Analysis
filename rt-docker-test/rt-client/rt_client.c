@@ -7,36 +7,33 @@
 
 #define API_URL "http://localhost:8000/ping"
 
-struct timespec next_activation;
-
-void set_realtime_priority() {
-    struct sched_param param;
-    param.sched_priority = 80;  // High RT priority
-    
-    if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
-        perror("sched_setscheduler failed");
-        exit(EXIT_FAILURE);
-    }
-}
 
 size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
     printf("%.*s", (int)(size * nmemb), (char*)contents);
     return size * nmemb;
 }
 
-void* rt_api_task(void* arg) {
+
+int main(int argc, char **argv) {
+    
+    /* Setting scheduler policy and priority*/
+    struct sched_param param;
+    int thread_priority = argc > 1 ? atoi(argv[1]) : 0;
+    param.sched_priority = thread_priority; 
+    sched_setscheduler(0, SCHED_FIFO, &param);
+    
+    /* Set thread id */
+    int thread_id = argc > 2 ? atoi(argv[2]) : -1;
+    
     CURL *curl = curl_easy_init();
     if (!curl) {
         fprintf(stderr, "CURL init failed\n");
         exit(EXIT_FAILURE);
     }
 
-    // Set periodic execution (1Hz)
-    clock_gettime(CLOCK_MONOTONIC, &next_activation);
-    next_activation.tv_sec += 1;
-
     while (1) {
-        //clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_activation, NULL);
+
+        /* Busy waiting*/
         clock_t start = clock();
         while ((double)(clock() - start) / CLOCKS_PER_SEC < 0.5);
 
@@ -52,19 +49,9 @@ void* rt_api_task(void* arg) {
         }
         printf("Done\n");
         
-        //next_activation.tv_sec += 1;
     }
 
     curl_easy_cleanup(curl);
-    return NULL;
-}
 
-int main() {
-    set_realtime_priority();
-    
-    pthread_t thread;
-    pthread_create(&thread, NULL, rt_api_task, NULL);
-    pthread_join(thread, NULL);
-    
     return 0;
 }
