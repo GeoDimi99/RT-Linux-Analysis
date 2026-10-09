@@ -1,270 +1,236 @@
-# Real Time Linux
+# Real-Time Linux Analysis
 
-Linux, originally, is designed to be a **time-sharing system**, i.e. the gool is give the best throughput from the hardware using all the resources at maximum, but it's also possible to make **real-time system**, i.e. the goal is the determinism even at a low global throughput. 
+Linux was originally designed as a **time-sharing system**: its goal is to maximize overall throughput by keeping all hardware resources as busy as possible. It can also be turned into a **real-time system**, where the goal is **determinism** (predictable, bounded latencies), even at the cost of lower overall throughput.
 
-There are two different approaches to make Linux real-time system, in my case I use the **Single Kernel Approach** (with PREEMPT_RT) that consist to modify the Linux Kernel itself in order to get required latencies.
+There are two main approaches to making Linux real-time:
 
-## Setup System
+- **Dual-kernel approach**: a small real-time co-kernel runs alongside Linux and handles time-critical tasks (e.g. Xenomai, RTAI).
+- **Single-kernel approach**: the Linux kernel itself is modified to achieve the required latencies.
 
-Following installation instructions are tested on VM (Virtual Box) running 64bit Ubuntu Server 24.04 LTS with 6.8.0-generic kernel.
+This project uses the **single-kernel approach** with the **PREEMPT_RT** patch.
 
-### Kernel and Patch Download
+> **Note:** since Linux 6.12, PREEMPT_RT is part of the mainline kernel, so newer kernels no longer need a separate patch. This guide uses kernel 6.8, which still requires it.
 
-- We need some tools to build the kernel
-  
-  ```bash
-  sudo apt update 
-  sudo apt install  build-essential libssl-dev libelf-dev \
-                    libncurses5-dev  flex bison bc 
-  ```
+## Table of Contents
 
-- Make a directory named **kernel** in the desired location:
-  
-  ```bash
-  mkdir -p ~/kernel
-  cd ~/kernel
-  ```
+- [System Setup](#system-setup)
+  - [Prerequisites](#prerequisites)
+  - [Download the Kernel and the Patch](#download-the-kernel-and-the-patch)
+  - [Configure the Kernel for PREEMPT_RT](#configure-the-kernel-for-preempt_rt)
+  - [Compile and Install the Kernel](#compile-and-install-the-kernel)
+- [Experiments and Analysis](#experiments-and-analysis)
+  - [Setup](#setup)
+  - [Basic RT Scheduling Tests](#basic-rt-scheduling-tests)
+  - [Summary of Results](#summary-of-results)
 
-- Print kernel version and machine related information, here we have linux kernel version 6.8.0, I would prefere to build and patch nearest kernel version to existing one.
-  
-  ```bash
-  uname -a
-  ```
+---
 
-- Download the Kernel and the Patch PREEMPT_RT
-  
-  ```bash
-  wget https://mirrors.edge.kernel.org/pub/linux/kernel/v6.x/linux-6.8.tar.xz
-  wget https://mirrors.edge.kernel.org/pub/linux/kernel/projects/rt/6.8/older/patch-6.8-rt8.patch.xz
-  ```
+## System Setup
 
-### Configure the settings for PREEMPT_RT
+The following instructions were tested on a **VirtualBox VM** running **Ubuntu Server 24.04 LTS (64-bit)** with the `6.8.0-generic` kernel.
 
-- Decompress and apply the patch
-  
-  ```bash
-  xz -cd linux-6.8.tar.xz | tar xvf -
-  cd linux-6.8/
-  xzcat ../patch-6.8-rt8.patch.xz | patch -p1 --verbose
-  ```
+### Prerequisites
 
-- To ensure that the RT kernel supports the current distribution, we need to copy current configuration
-  
-  ```bash
-  cp /boot/config-$(uname -r) .config
-  ```
+Install the tools needed to build the kernel:
 
-- Keep default settings by automatically setting yes to old configuration.
-  
-  ```bash
-  yes '' | make oldconfig
-  ```
+```bash
+sudo apt update
+sudo apt install build-essential libssl-dev libelf-dev \
+                 libncurses5-dev flex bison bc
+```
 
-- Menuconfig allows us to choose linux features, in this case PREEMPT_RT patch related functionality
-  
-  ```bash
-  make menuconfig
-  ```
+### Download the Kernel and the Patch
 
-- Timer tick handling (Full dynticks system (tickless))
-  
-  ```
-  # Enable CONFIG_NO_HZ_FULL
-   -> General setup
-    -> Timers subsystem
-     -> Timer tick handling (Full dynticks system (tickless))
-      (X) Full dynticks system (tickless)
-  ```
+1. Create a working directory:
 
-- Preemption Model (Fully Preemptible Kernel (Real-Time))
-  
-  ```
-  # Enable CONFIG_PREEMPT_RT
-   -> General Setup
-    -> Preemption Model (Fully Preemptible Kernel (Real-Time))
-     (X) Fully Preemptible Kernel (Real-Time)
-  ```
+   ```bash
+   mkdir -p ~/kernel
+   cd ~/kernel
+   ```
 
-- Timer frequency
-  
-  ```
-  # Set CONFIG_HZ_1000 (note: this is no longer in the General Setup menu, go back twice)
-   -> Processor type and features
-    -> Timer frequency (1000 HZ)
-     (X) 1000 HZ
-  ```
+2. Check the current kernel version. It is best to build a kernel version as close as possible to the one already installed (here, 6.8.0):
 
-- Default CPUFreq governor
-  
-  ```
-  # Set CONFIG_HZ_1000 (note: this is no longer in the General Setup menu, go back twice)
-   -> Processor type and features
-    -> Timer frequency (1000 HZ)
-     (X) 1000 HZ
-  ```
+   ```bash
+   uname -a
+   ```
 
-- In your kernel configuration file specifically when compiling on Ubuntu (debian)to avoid any error during compilation process related to SYSTEM_TRUSTED_KEYS and CONFIG_SYSTEM_REVOCATION_KEYS update following lines
-  
-  ```bash
-  scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
-  scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
-  ```
+3. Download the kernel sources and the matching PREEMPT_RT patch:
 
-### Compile and Install Kernel
+   ```bash
+   wget https://mirrors.edge.kernel.org/pub/linux/kernel/v6.x/linux-6.8.tar.xz
+   wget https://mirrors.edge.kernel.org/pub/linux/kernel/projects/rt/6.8/older/patch-6.8-rt8.patch.xz
+   ```
 
-- Compile the kernel (It could take time, in my case 9 h)
-  
-  ```bash
-  sudo make
-  ```
+### Configure the Kernel for PREEMPT_RT
 
-- Install the kernel, update grub and reboot
-  
-  ```bash
-  sudo make modules_install
-  sudo make install 
-  sudo update-grub
-  reboot
-  ```
+1. Extract the sources and apply the patch:
 
-- Check the kernel version (it could appear PREEMPT_RT )
-  
-  ```bash
-  uname -a
-  ```
+   ```bash
+   xz -cd linux-6.8.tar.xz | tar xvf -
+   cd linux-6.8/
+   xzcat ../patch-6.8-rt8.patch.xz | patch -p1 --verbose
+   ```
+
+2. Start from the current distribution's configuration, so the new kernel supports the same hardware and features:
+
+   ```bash
+   cp /boot/config-$(uname -r) .config
+   ```
+
+3. Accept the default value for every new option:
+
+   ```bash
+   yes '' | make oldconfig
+   ```
+
+4. Open the configuration menu to enable the real-time features:
+
+   ```bash
+   make menuconfig
+   ```
+
+   Set the following options:
+
+   | Option | Menu path | Value |
+   |---|---|---|
+   | `CONFIG_NO_HZ_FULL` | General setup → Timers subsystem → Timer tick handling | Full dynticks system (tickless) |
+   | `CONFIG_PREEMPT_RT` | General setup → Preemption Model | Fully Preemptible Kernel (Real-Time) |
+   | `CONFIG_HZ_1000` | Processor type and features → Timer frequency | 1000 HZ |
+   | `CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE` | Power management and ACPI options → CPU Frequency scaling → Default CPUFreq governor | performance |
+
+   Save the configuration and exit.
+
+5. On Ubuntu/Debian, clear the trusted and revocation keys to avoid certificate-related build errors:
+
+   ```bash
+   scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
+   scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
+   ```
+
+### Compile and Install the Kernel
+
+1. Compile the kernel using all available CPU cores:
+
+   ```bash
+   make -j$(nproc)
+   ```
+
+   > Compilation can take a long time. On a single-core VM it took about **9 hours**; using `-j$(nproc)` on a multi-core machine reduces this considerably. `sudo` is not needed for this step.
+
+2. Install the modules and the kernel, update GRUB and reboot:
+
+   ```bash
+   sudo make modules_install
+   sudo make install
+   sudo update-grub
+   sudo reboot
+   ```
+
+3. After rebooting, verify that the real-time kernel is running. The output should contain `PREEMPT_RT`:
+
+   ```bash
+   uname -a
+   ```
+
+---
 
 ## Experiments and Analysis
 
-In the follow for perform the experiments we need to install some tools before (tmux, git and docker):
+### Setup
 
-- install the tools:
-  
-  ```bash
-  sudo apt update
-  sudo apt install tmux git docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-  ```
+1. Install the tools used in the experiments (tmux, git and Docker):
 
-- clone the repository:
-  
-  ```bash
-  git clone https://github.com/GeoDimi99/RT-Linux-Analysis.git
-  cd RT-Linux-Analysis
-  ```
+   ```bash
+   sudo apt update
+   sudo apt install tmux git
+   ```
 
-### RT Basic Tests
+   For Docker, the `docker-ce` packages require Docker's official apt repository to be configured first (see the [Docker install guide for Ubuntu](https://docs.docker.com/engine/install/ubuntu/)). Then:
 
-The follow experiments are inspired from [Understanding Linux Scheduling](https://www.linkedin.com/pulse/20140629145049-21586023-understanding-linux-scheduling/). The experiment consist of three different codes that use the three different scheduler (i.e. SCHED_OTHER, SCHED_FIFO and SCHED_RR). 
+   ```bash
+   sudo apt install docker-ce docker-ce-cli containerd.io \
+                    docker-buildx-plugin docker-compose-plugin
+   ```
 
-The scenarios analyzed are:
+2. Clone this repository:
 
-- **Two FIFO tasks (same priority)**
+   ```bash
+   git clone https://github.com/GeoDimi99/RT-Linux-Analysis.git
+   cd RT-Linux-Analysis
+   ```
 
-- **Two RR tasks (same priority)**
+### Basic RT Scheduling Tests
 
-- **Two RR tasks (different priorities)**
+These experiments are inspired by [Understanding Linux Scheduling](https://www.linkedin.com/pulse/20140629145049-21586023-understanding-linux-scheduling/). They use three programs, one for each Linux scheduling policy:
 
-- **Two RR tasks and one FIFO task (same priority)**
+- **SCHED_OTHER**: the default, non-real-time time-sharing policy.
+- **SCHED_FIFO**: real-time, first-in first-out. A task runs until it blocks, yields, or is preempted by a higher-priority task.
+- **SCHED_RR**: real-time round-robin. Like FIFO, but tasks with the same priority share the CPU in fixed time slices.
 
-- **One OTHER task and one FIFO task**
+All experiments run on a **single-core** system, and every task executes an infinite loop that prints output.
 
+#### Experiment 1: Two FIFO tasks (same priority)
 
+Two tasks were scheduled under `SCHED_FIFO` with the same priority (1).
 
-#### Exp 1: Two FIFO task (Same Priority)
+The first task (green) started and immediately began producing output. The second task (red), started afterwards, stayed blocked and produced no output until the first task was stopped with `CTRL+C`.
 
-In the first experiment, the system under consideration is single-core. Two tasks were created, each executing an infinite loop, and both were scheduled under **SCHED_FIFO** with identical priority (priority level = 1).
+**Why:** a FIFO task never gives up the CPU to a task of equal priority, so the second task waits until the first one terminates.
 
-The first task (green) was launched and immediately began producing output. When the second task (red) was started, it remained blocked and did not generate any output until a `CTRL+C` signal was issued.
+#### Experiment 2: Two RR tasks (same priority)
 
-The experimental results are as follows:
+Two tasks were scheduled under `SCHED_RR` with the same priority.
 
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-17-20-image.png)
+Both tasks alternated, producing interleaved output.
 
-After `CTRL+C`:
+**Why:** under round-robin, tasks of equal priority take turns, each running for one time slice before moving to the back of the queue.
 
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-17-58-image.png)
+#### Experiment 3: Two RR tasks (different priorities)
 
-The corresponding execution pattern can be modeled as follows:
+Two `SCHED_RR` tasks were launched, the first with priority 1 and the second with priority 2. The lower-priority task was started first.
 
+As soon as the higher-priority task started, the lower-priority task was preempted. The higher-priority task ran exclusively until it was stopped with `CTRL+C`, after which the lower-priority task resumed.
 
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-22-15-23-image.png)
+**Why:** round-robin time slicing applies only among tasks of the *same* priority; a higher-priority task always preempts a lower-priority one.
 
+#### Experiment 4: Two RR tasks and one FIFO task (same priority)
 
+Two `SCHED_RR` tasks and one `SCHED_FIFO` task were launched, all with the same priority.
 
-#### Exp 2: Two RR task (Same Priority)
+At first, the two RR tasks alternated as expected. Once the FIFO task was scheduled, it took over the CPU and the RR tasks no longer ran.
 
-The second experiment involved two tasks scheduled under **SCHED_RR** with identical priority. In this case, both tasks successfully alternated in producing output.
+**Why:** FIFO and RR tasks share the same priority queue. When the FIFO task gets the CPU, it has no time slice, so it never yields to the RR tasks.
 
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-23-50-image.png)
+#### Experiment 5: One OTHER task and one FIFO task
 
-This behavior is consistent with the **Round Robin** policy, whereby tasks of the same priority share the CPU in time slices. The duration of each time slice is determined by the system parameter:`/proc/sys/kernel/sched_rr_timeslice_ms`.
+A `SCHED_OTHER` (non-real-time) task and a `SCHED_FIFO` (real-time) task were run together.
 
-The expected execution pattern is depicted below:
+In principle, a real-time task should always preempt a non-real-time one, so the OTHER task was expected to stop running once the FIFO task started. **This did not happen:** the OTHER task kept producing some output.
 
+**Why:** Linux limits how much CPU time real-time tasks may consume (*RT throttling*). Two kernel parameters control this:
 
+| Parameter | Default | Meaning |
+|---|---|---|
+| `/proc/sys/kernel/sched_rt_period_us` | `1000000` µs (1 s) | Length of the accounting period |
+| `/proc/sys/kernel/sched_rt_runtime_us` | `950000` µs (0.95 s) | Maximum RT CPU time within each period |
 
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-22-18-image.png)
+With the defaults, real-time tasks can use at most 95% of each second; the remaining 5% is reserved for non-real-time tasks. This keeps a runaway real-time task from freezing the system.
 
+The limit can be inspected, and disabled for testing by setting the runtime to `-1`:
 
+```bash
+cat /proc/sys/kernel/sched_rt_runtime_us
+echo -1 | sudo tee /proc/sys/kernel/sched_rt_runtime_us
+```
 
+> **Warning:** with throttling disabled, a real-time task in an infinite loop can make a single-core system completely unresponsive.
 
+### Summary of Results
 
-#### Exp 3: Two RR task (different priority)
-
-The third experiment analyzed the effect of different priorities under **SCHED_RR**. Two tasks were launched: the first with priority 1 and the second with priority 2. The lower-priority task was started first, but upon initiation of the higher-priority task, the former was immediately preempted.
-
-The higher-priority task continued to execute exclusively until a `CTRL+C` signal was sent, after which the lower-priority task resumed.
-
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-35-23-image.png)
-
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-35-48-image.png)
-
-The execution can be represented as:
-
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-37-15-image.png)
-
-
-
-#### Exp 4: Two RR task and one FIFO task (Same Priority)
-
-The fourth experiment considered the interaction between **SCHED_RR** and **SCHED_FIFO**. Two RR tasks were launched together with one FIFO task, all configured with the same priority.
-
-Initially, the two RR tasks alternated execution and produced output concurrently. Once the FIFO task was scheduled, however, it monopolized the CPU, preventing further execution of the RR tasks.
-
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-46-42-image.png)
-
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-47-21-image.png)
-
-
-
-This illustrates the higher scheduling precedence of FIFO over RR when priorities are equal. The corresponding execution model is:
-
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-49-05-image.png)
-
-
-
-
-
-#### Exp 5: One OTHER task and one FIFO task
-
-The final experiment investigated the interplay between a **SCHED_OTHER** task (non-real-time) and a **SCHED_FIFO** task (real-time).  
-In principle, real-time tasks should always preempt non-real-time tasks. Consequently, one would expect the **OTHER** task to be suspended once the FIFO task begins execution.
-
-However, the observed results diverged from this expectation:The empirical behavior suggests periodic resumption of the non-real-time task, as illustrated below:
-
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-53-22-image.png)
-
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-53-42-image.png)
-
-The empirical behavior suggests periodic resumption of the non-real-time task, as illustrated below:
-
-![](C:\Users\dimit\AppData\Roaming\marktext\images\2025-09-24-23-57-13-image.png)
-
-This anomaly can be explained by two kernel parameters governing the allocation of CPU time to real-time tasks, both accessible via the `/proc` filesystem:
-
-- `/proc/sys/kernel/sched_rt_period_us`  
-  (default value = `1000000` µs, i.e., 1 second)
-
-- `/proc/sys/kernel/sched_rt_runtime_us`  
-  (default value = `950000` µs, i.e., 0.95 seconds), which defines the maximum fraction of CPU time that real-time tasks may consume.
-
-These constraints prevent real-time tasks from monopolizing the CPU indefinitely, thereby ensuring a minimal execution window for non-real-time tasks.
+| # | Tasks | Observed behavior |
+|---|---|---|
+| 1 | 2× FIFO, same priority | The first task runs; the second waits until the first ends |
+| 2 | 2× RR, same priority | The tasks alternate |
+| 3 | 2× RR, different priorities | The higher-priority task runs exclusively |
+| 4 | 2× RR + 1× FIFO, same priority | RR tasks alternate until the FIFO task takes over |
+| 5 | 1× OTHER + 1× FIFO | OTHER still runs, because of RT throttling |
